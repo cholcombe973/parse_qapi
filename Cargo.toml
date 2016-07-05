@@ -1,0 +1,9 @@
+[package]
+name = "parse_qapi"
+version = "0.1.0"
+authors = ["Chris Holcombe <xfactor973@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/cholcombe973/parse_qapi"
+
+[dependencies]
+nom = "~1.2"
