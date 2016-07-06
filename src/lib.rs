@@ -1,3 +1,4 @@
+extern crate json;
 #[macro_use] extern crate nom;
 
 use std::str::{from_utf8};
@@ -20,13 +21,39 @@ named!(comment_block<&[u8], Vec<String> >,
 
 named!(comment_line<&[u8], String>,
     chain!(
-        tag!("#") ~
+        alt!(
+            tag!("#")
+            | tag!("\n")
+            | tag!(" ")) ~
         line: map_res!(take_until_and_consume!("\n"), from_utf8),
         ||{
             line.to_string()
         }
     )
 );
+
+//Count {}'s and return a section
+fn find_element(input: &[u8]) ->nom::IResult<&[u8], String>{
+    let mut brace_count = 0;
+    let mut count = 0;
+    loop {
+        if input[count] as char == '{'{
+            brace_count +=1;
+            count += 1;
+            continue;
+        }
+        else if input[count] as char == '}'{
+            brace_count -=1;
+            count += 1;
+            if brace_count == 0{
+                break;
+            }
+            continue;
+        }
+        count += 1;
+    }
+    nom::IResult::Done(&input[count .. ], String::from_utf8_lossy(&input[0..count]).into_owned())
+}
 
 /*
 #[test]
@@ -470,7 +497,7 @@ impl Struct{
             }
         }
     }
-    fn to_string(self)->String{
+    pub fn to_string(self)->String{
         let mut struct_fields:Vec<String> = Vec::new();
 
         if let Some(b) = self.base{
@@ -535,7 +562,7 @@ impl Command{
         )
     }
     //TODO Put this in a mod of just qemu commands
-    fn to_string(self)->String{
+    pub fn to_string(self)->String{
         let mut struct_fields:Vec<String> = Vec::new();
         let mut impl_fields:Vec<String> = Vec::new();
         let mut impl_input:Vec<String> = Vec::new();
@@ -656,7 +683,7 @@ impl Enum{
             }
         )
     }
-    fn to_string(self)->String{
+    pub fn to_string(self)->String{
         format!(r#"
             #[derive(Debug, Serialize, Deserialize)]
             pub enum {} {{
@@ -685,7 +712,7 @@ pub enum QemuType{
 
 impl QemuType {
     fn parse(input: & [u8]) -> nom::IResult<&[u8], Self> {
-        //println!("Input to Type: {:?}", String::from_utf8_lossy(input));
+        println!("Input to Type: {:?}", String::from_utf8_lossy(input));
         let f = chain!(
             input,
             fields: field_pair~
@@ -1026,15 +1053,20 @@ impl Section{
         chain!(
             input,
             comments: comment_block~
+            element: call!(find_element) ~
+            /*
             tag!("{")~
             blanks? ~
             qemu_type: call!(QemuType::parse) ~
             tag!("}")~
+            */
             blanks?,
             ||{
+                let result = json::parse(&element);
+                println!("Json result: {:?}", result);
                 Section{
                     description: comments,
-                    qemu_type: qemu_type,
+                    qemu_type: QemuType::Unknown,
                 }
             }
         )
@@ -1070,6 +1102,7 @@ pub fn print_section(s: Section){
 pub fn parse_sections(input: &[u8])-> nom::IResult<&[u8], Vec<Section>>{
     chain!(
         input,
+        comment_block ~ //Get rid of the Mode: Python crap at the top
         sections: many0!(call!(Section::parse)),
         ||{
             sections
