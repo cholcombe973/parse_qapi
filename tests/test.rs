@@ -75,3 +75,27 @@ fn test_qapi(){
     }
     //println!("QAPI Result: {:?}", result);
 }
+
+#[test]
+fn test_event(){
+    let mut f = File::open("tests/event.json").unwrap();
+    let mut buf = String::new();
+    f.read_to_string(&mut buf).unwrap();
+    //Sanitize input
+    let buf = buf.replace("\'", "\"");
+
+    let result = parse_qapi::parse_sections(buf.as_bytes());
+    match result{
+        nom::IResult::Done(left, qemu_sections) => {
+            println!("Event leftover: {}", String::from_utf8_lossy(left));
+            println!("Event Result: {:?}", qemu_sections);
+        },
+        nom::IResult::Incomplete(needed) => {
+            println!("Incomplete: {:?}", needed);
+        },
+        nom::IResult::Error(e) => {
+            println!("Error: {:?}", e);
+        },
+    }
+    //println!("QAPI Result: {:?}", result);
+}

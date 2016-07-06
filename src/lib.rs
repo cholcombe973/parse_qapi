@@ -56,6 +56,52 @@ fn find_element(input: &[u8]) ->nom::IResult<&[u8], String>{
     nom::IResult::Done(&input[count .. ], String::from_utf8_lossy(&input[0..count]).into_owned())
 }
 
+fn remove_comments(input: String)->String{
+    let mut buf = String::new();
+    let mut comment = false;
+    for c in input.chars(){
+        //I found the start of a comment line
+        if c == '#'{
+            comment = true;
+        }
+        if comment{
+            //This is the end of the comment line
+            if c == '\n'{
+                comment = false;
+            }
+            //Continue until we reach the end of the line
+            continue;
+        }
+        buf.push(c)
+    }
+    buf
+}
+
+#[test]
+fn test_remove_comments(){
+    let input = r#"{ 'union': 'ChardevBackend', 'data': { 'file'   : 'ChardevFile',
+                                       'serial' : 'ChardevHostdev',
+                                       'parallel': 'ChardevHostdev',
+                                       'pipe'   : 'ChardevHostdev',
+                                       'socket' : 'ChardevSocket',
+                                       'udp'    : 'ChardevUdp',
+                                       'pty'    : 'ChardevCommon',
+                                       'null'   : 'ChardevCommon',
+                                       'mux'    : 'ChardevMux',
+                                       'msmouse': 'ChardevCommon',
+                                       'braille': 'ChardevCommon',
+                                       'testdev': 'ChardevCommon',
+                                       'stdio'  : 'ChardevStdio',
+                                       'console': 'ChardevCommon',
+                                       'spicevmc' : 'ChardevSpiceChannel',
+                                       'spiceport' : 'ChardevSpicePort',
+                                       'vc'     : 'ChardevVC',
+                                       'ringbuf': 'ChardevRingbuf',
+                                       # next one is just for compatibility
+                                       'memory' : 'ChardevRingbuf' } }"#;
+    println!("{}", remove_comments(input.to_string()));
+}
+
 /*
 named!(description<Description>,
     chain!(
@@ -101,40 +147,60 @@ pub struct Struct{
     pub base: JsonValue,
 }
 
+fn json_val_to_rust(input: &JsonValue) -> String{
+    match input{
+        &JsonValue::String(ref s) => {
+            "String".to_string()
+        },
+        &JsonValue::Number(num) => {
+            "f64".to_string()
+        },
+        &JsonValue::Boolean(b) => {
+            "bool".to_string()
+        },
+        &JsonValue::Null => {
+            "None".to_string()
+        },
+        &JsonValue::Object(ref map) => {
+            "struct".to_string()
+        },
+        &JsonValue::Array(ref values) => {
+            "Vec".to_string()
+        },
+    }
+}
+
 impl Struct{
     fn parse(input: &JsonValue) -> Self {
         //Check if base is first. Sometimes it comes first and sometimes data comes first
         Struct{
-            name: input["struct"].as_str().unwrap_or("").to_string(),
+            name: input["struct"].as_str().unwrap().to_string(),
             fields: input["data"].clone(),
             base: input["base"].clone(),
         }
     }
-    pub fn to_string(self)->String{
-        /*
+    pub fn to_rust_string(self)->String{
         let mut struct_fields:Vec<String> = Vec::new();
 
-        if let Some(b) = self.base{
-            struct_fields.push(format!("base: {}", b));
-        };
-
-        for f in self.fields.clone(){
-            struct_fields.push(format!("pub {name}:{type}",
-                name=f.0.replace("-", "_"),
-                type=f.1.replace("str", "String")
-                .replace("int", "i64")
-            ));
+        if self.base.is_string(){
+            struct_fields.push(format!("base: {}", self.base.as_str().unwrap()));
         }
 
+        if self.fields.is_object(){
+            for f in self.fields.entries(){
+                struct_fields.push(format!("pub {name}:{type}",
+                    name=f.0.replace("-", "_").replace("*",""),
+                    type=json_val_to_rust(f.1)
+                ));
+            }
+        }
 
         format!(r#"
-            #[derive(Debug, Serialize, Deserialize)]
+            #[derive(Debug)]
             pub struct {name}{{
                 {fields}
             }}
             "#, name=self.name, fields=struct_fields.join(","))
-        */
-        "".to_string()
     }
 }
 
@@ -149,53 +215,53 @@ pub struct Command{
 impl Command{
     fn parse(input: &json::JsonValue) -> Self {
         Command{
-            name: input["command"].as_str().unwrap_or("").to_string(),
+            name: input["command"].as_str().unwrap().to_string(),
             gen: input["gen"].clone(),
             fields: input["data"].clone(),
             returns: input["returns"].clone(),
         }
     }
     //TODO Put this in a mod of just qemu commands
-    pub fn to_string(self)->String{
-        /*
+    pub fn to_rust_string(self)->String{
         let mut struct_fields:Vec<String> = Vec::new();
         let mut impl_fields:Vec<String> = Vec::new();
         let mut impl_input:Vec<String> = Vec::new();
 
-        if let Some(f) = self.fields{
-            for field in f{
-                let name = field.0.replace("-", "_");
-                let field_type =field.1.replace("str", "String")
-                    .replace("int", "i64");
+        if self.fields.is_object(){
+            for f in self.fields.entries(){
+                let name = f.0.replace("-", "_").replace("*","");
+                let field_type = json_val_to_rust(f.1);
 
                 struct_fields.push(format!("pub {name}:{type}", name=name, type=field_type));
                 impl_fields.push(format!("{name}:{name}", name=name));
                 impl_input.push(format!("{name}:{type}",name=name, type=field_type));
             }
         }
-
-        if let Some(r) = self.returns{
-            match r{
-                QemuReturnType::List(l) => {
-                    struct_fields.push(format!("#[serde(skip_serializing)]\nreturns:{}", l.replace("str", "String")));
+        match self.returns{
+            JsonValue::String(s) => {
+                struct_fields.push(format!("#[serde(skip_serializing)]\nreturns:{}", s.replace("str", "String")));
+                impl_fields.push(format!("returns:{}", s.replace("str", "String")));
+                impl_input.push(format!("{name}:String",name=s));
+            }
+            JsonValue::Array(array) => {
+                /*
+                TODO: What do I do here?
+                for val in array{
+                    struct_fields.push(format!("#[serde(skip_serializing)]\nreturns:{}", array.dump().replace("str", "String")));
                     impl_fields.push(format!("returns:{}", l.replace("str", "String")));
                     impl_input.push(format!("{name}:Vec<{type}>",name=l, type=l));
-                },
-                QemuReturnType::String(s) => {
-                    struct_fields.push(format!("#[serde(skip_serializing)]\nreturns:{}", s.replace("str", "String")));
-                    impl_fields.push(format!("returns:{}", s.replace("str", "String")));
-                    impl_input.push(format!("{name}:{type}",name=s, type=s));
-                },
+                }
+                */
             }
-        }
+            _=>{}
+        };
 
-        let mut gen = String::new();
-        if let Some(g) = self.gen{
+        if !self.gen.is_null(){
             struct_fields.push("gen: bool".to_string());
         }
 
         format!(r#"
-        #[derive(Debug, Serialize, Deserialize)]
+        #[derive(Debug)]
         pub struct {name} {{
             execute: String,
             {fields}
@@ -214,8 +280,6 @@ impl Command{
         impl_fields=impl_fields.join(","),
         impl_input=impl_input.join(",")
     )
-    */
-    "".to_string()
     }
 }
 
@@ -230,7 +294,7 @@ pub struct Union{
 impl Union{
     fn parse(input: &json::JsonValue) -> Self {
         Union{
-            name: input["union"].as_str().unwrap_or("").to_string(),
+            name: input["union"].as_str().unwrap().to_string(),
             discriminator: input["discriminator"].clone(),
             data: input["data"].clone(),
         }
@@ -246,9 +310,24 @@ pub struct Event{
 impl Event{
     fn parse(input: &json::JsonValue) -> Self {
         Event{
-            name: input["event"].as_str().unwrap_or("").to_string(),
+            name: input["event"].as_str().unwrap().to_string(),
             data: input["data"].clone(),
         }
+    }
+    pub fn to_rust_string(self)->String{
+        /*
+        format!(r#"
+            #[derive(Debug)]
+            pub struct {name} {{
+                execute: String,
+                {fields}
+            }}
+            "#,
+            name=self.name.replace("-", "_"),
+            fields=struct_fields.join(","),
+        )
+        */
+        "".to_string()
     }
 }
 
@@ -261,26 +340,20 @@ pub struct Enum{
 impl Enum{
     fn parse(input: &json::JsonValue) -> Self {
         Enum{
-            name: input["enum"].as_str().unwrap_or("").to_string(),
+            name: input["enum"].as_str().unwrap().to_string(),
             fields: input["data"].clone(),
         }
     }
-    pub fn to_string(self)->String{
+    pub fn to_rust_string(self)->String{
         /*
         format!(r#"
-            #[derive(Debug, Serialize, Deserialize)]
+            #[derive(Debug)]
             pub enum {} {{
                 {fields}
             }}"#, self.name, fields=self.fields.into_iter().map(|s| s.replace("-", "_")).collect::<Vec<String>>().join(","))
         */
         "".to_string()
     }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum QemuReturnType{
-    List(String), //A list type
-    String(String), // Returns a single thing
 }
 
 #[derive(Debug, PartialEq)]
@@ -306,10 +379,8 @@ impl QemuType {
             QemuType::Enum(Enum::parse(&input))
         }else if ! input["command"].is_null(){
             QemuType::Command(Command::parse(&input))
-
         }else if ! input["union"].is_null(){
             QemuType::Union(Union::parse(&input))
-
         }else if ! input["struct"].is_null(){
             QemuType::Struct(Struct::parse(&input))
         }else if ! input["event"].is_null(){
@@ -335,32 +406,39 @@ impl Section{
             element: call!(find_element) ~
             blanks?,
             ||{
-                let result = json::parse(&element).unwrap();
+                let result: json::JsonResult<JsonValue>;
+                if element.contains("#"){
+                    let clean_element = remove_comments(element);
+                    result = json::parse(&clean_element);
+                }else{
+                    result = json::parse(&element);
+                }
                 println!("Json result: {:?}", result);
 
                 Section{
                     description: comments,
-                    qemu_type: QemuType::parse(result),
+                    qemu_type: QemuType::parse(result.unwrap()),
                 }
             }
         )
     }
 }
 
+/*
 pub fn print_section(s: Section){
     match s.qemu_type{
         QemuType::Struct(st) => {
             //TODO: Write these to structs/mod.rs
             println!("{}", s.description.join("\n///"));
-            println!("{}", st.to_string());
+            println!("{}", st.to_rust_string());
         },
         QemuType::Command(c) => {
             println!("{}", s.description.join("\n///"));
-            println!("{}", c.to_string());
+            println!("{}", c.to_rust_string());
         },
         QemuType::Enum(e) => {
             println!("{}", s.description.join("\n///"));
-            println!("{}", e.to_string());
+            println!("{}", e.to_rust_string());
         },
         QemuType::Include{name} => {
             println!("{}", s.description.join("\n///"));
@@ -375,6 +453,7 @@ pub fn print_section(s: Section){
         QemuType::Unknown => {},
     }
 }
+*/
 
 pub fn parse_sections(input: &[u8])-> nom::IResult<&[u8], Vec<Section>>{
     chain!(
