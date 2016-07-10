@@ -61,10 +61,11 @@ named!(comment_block<&[u8], Vec<String> >,
 
 named!(comment_line<&[u8], String>,
     chain!(
-        alt!(
-            tag!("#")
-            | tag!("\n")
-            | tag!(" ")) ~
+        tag!("#") ~
+// alt!(
+//    tag!("#")
+//    | tag!("\n")
+//    | tag!(" ")) ~
         line: map_res!(take_until_and_consume!("\n"), from_utf8),
         ||{
             line.to_string()
@@ -187,7 +188,16 @@ pub struct Struct {
 
 fn json_val_to_rust(input: &JsonValue) -> String {
     match input {
-        &JsonValue::String(ref s) => "String".to_string(),
+        &JsonValue::String(ref s) => {
+            match s.as_ref() {
+                "uint64" => "u64".to_string(),
+                "uint32" => "u32".to_string(),
+                "bool" => "bool".to_string(),
+                "int" => "f64".to_string(),
+                "str" => "String".to_string(),
+                _ => "String".to_string(),
+            }
+        }
         &JsonValue::Number(num) => "f64".to_string(),
         &JsonValue::Boolean(b) => "bool".to_string(),
         &JsonValue::Null => "None".to_string(),
