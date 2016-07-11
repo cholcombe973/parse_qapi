@@ -1,7 +1,7 @@
 [package]
 name = "parse_qapi"
 description = "A library to parser qemu's json like QAPI. This uses a nom parser to parse the json and the descriptions.  This library is used by the qemu-rust-generator project to build the library"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Chris Holcombe <xfactor973@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/cholcombe973/parse_qapi"
