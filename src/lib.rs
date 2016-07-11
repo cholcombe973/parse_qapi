@@ -1,3 +1,4 @@
+#[macro_use]
 extern crate json;
 #[macro_use]
 extern crate lazy_static;
@@ -263,42 +264,24 @@ impl Command {
         let mut impl_fields: Vec<String> = Vec::new();
         let mut impl_input: Vec<String> = Vec::new();
         let mut returns = String::new();
+        let mut to_json: Vec<String> = Vec::new();
+
+
 
         if self.fields.is_object() {
             for f in self.fields.entries() {
                 let name = sanitize_name(f.0);
                 let field_type = json_val_to_rust(f.1);
 
+                to_json.push(format!(
+                        "to_json[\"{execute}\"][\"arguments\"][\"{name}\"] =
+                        self.{name}.clone().into();",
+                    execute=&self.name, name=name));
                 struct_fields.push(format!("pub {name}:{type}", name=name, type=field_type));
                 impl_fields.push(format!("{name}:{name}", name=name));
                 impl_input.push(format!("{name}:{type}",name=name, type=field_type));
             }
         }
-        if !self.returns.is_null() {
-            // This goes in the parse_qemu_response function
-            match self.returns {
-                JsonValue::String(s) => {
-                    let name = sanitize_name(&s);
-                    returns.push_str(&format!(r#"
-                        pub fn parse_qemu_response(response: &String) -> Result<{name},String>{{
-                            Ok(json::decode(&response).unwrap())
-                        }}
-                    "#, name=name));
-                }
-                JsonValue::Array(array) => {
-                    // TODO: What do I do here?
-                    // for val in array {
-                    //    struct_fields.push(format!("#[serde(skip_serializing)]\nreturns:{}",
-                    // array.dump().replace("str", "String")));
-                    // impl_fields.push(format!("returns:{}", l.replace("str", "String")));
-                    // impl_input.push(format!("{name}:Vec<{type}>",name=l, type=l));
-                    // }
-                }
-                _ => {}
-            };
-
-        }
-
 
         if !self.gen.is_null() {
             struct_fields.push("gen: bool".to_string());
@@ -306,27 +289,79 @@ impl Command {
             impl_fields.push("gen: gen".to_string());
         }
 
+        if !self.returns.is_null() {
+            // This goes in the parse_qemu_response function
+            match self.returns {
+                JsonValue::String(s) => {
+                    let name = sanitize_name(&s);
+                    returns.push_str(&format!(r#"
+                        fn parse_qemu_response(&self, response: &String) ->
+                            rustc_json::DecodeResult<T>
+                            where T: rustc_decodable{{
+                            rustc_json::decode(&response)
+                        }}
+                    "#));
+                }
+                JsonValue::Array(array) => {
+                    let name = array.clone().pop();
+                    match name {
+                        Some(n) => {
+                            returns.push_str(&format!(r#"
+                                fn parse_qemu_response(&self, response: &String) ->
+                                    rustc_json::DecodeResult<T>
+                                    where T: rustc_decodable{{
+                                    rustc_json::decode(&response)
+                                }}
+                            "#));
+                        }
+                        None => {
+                            // TODO: What should we do here if the array doesn't have a value?
+                        }
+                    }
+                }
+                _ => {}
+            };
+
+        } else {
+            let name = sanitize_name(&self.name);
+            returns.push_str(r#"
+                fn parse_qemu_response(&self, response: &String) ->
+                    rustc_json::DecodeResult<T> where T: rustc_decodable{
+                    rustc_json::decode(&response)
+                }
+            "#);
+        }
+
         format!(r#"
         #[derive(Debug)]
         pub struct {name} {{
-            execute: String,
             {fields}
         }}
         impl {name} {{
             pub fn new({impl_input})->{name}{{
                 {name}{{
-                    execute: "{name}".to_string(),
                     {impl_fields}
                 }}
             }}
-            {returns}
+        }}
+        impl<T> QemuCmd<T> for {name} {{
+            fn to_json(&self)->String{{
+                let mut to_json = json::JsonValue::new_object();
+                to_json["execute"] = "{execute_name}".into();
+                to_json["arguments"] = json::JsonValue::new_object();
+                {to_json_fields}
+                to_json.dump()
+            }}
+            {parse_response}
         }}
         "#,
         name=sanitize_name(&self.name),
+        execute_name=&self.name,
         fields=struct_fields.join(","),
         impl_fields=impl_fields.join(","),
         impl_input=impl_input.join(","),
-        returns=returns
+        to_json_fields=to_json.join("\n"),
+        parse_response=returns
     )
     }
 }
@@ -365,7 +400,7 @@ impl Union {
         }
 
         format!(r#"
-            #[derive(Debug)]
+            #[derive(Debug,RustcDecodable)]
             pub struct {name}{{
                 {fields}
             }}
@@ -440,7 +475,7 @@ impl Enum {
         }
 
         format!(r#"
-            #[derive(Debug)]
+            #[derive(Debug,RustcDecodable)]
             pub enum {name} {{
                 {fields}
             }}
