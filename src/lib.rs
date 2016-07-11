@@ -436,7 +436,6 @@ impl Event {
         format!(r#"
             #[derive(Debug)]
             pub struct {name} {{
-                execute: String,
                 {fields}
             }}
             "#,
