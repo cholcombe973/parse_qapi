@@ -274,9 +274,8 @@ impl Command {
                 let field_type = json_val_to_rust(f.1);
 
                 to_json.push(format!(
-                        "to_json[\"{execute}\"][\"arguments\"][\"{name}\"] =
-                        self.{name}.clone().into();",
-                    execute=&self.name, name=name));
+                        "to_json[\"arguments\"][\"{qemu_name}\"] = self.{name}.clone().into();",
+                    qemu_name=f.0.replace("*",""),name=name));
                 struct_fields.push(format!("pub {name}:{type}", name=name, type=field_type));
                 impl_fields.push(format!("{name}:{name}", name=name));
                 impl_input.push(format!("{name}:{type}",name=name, type=field_type));
@@ -296,23 +295,21 @@ impl Command {
                     let name = sanitize_name(&s);
                     returns.push_str(&format!(r#"
                         fn parse_qemu_response(&self, response: &String) ->
-                            rustc_json::DecodeResult<T>
-                            where T: rustc_decodable{{
-                            rustc_json::decode(&response)
+                        rustc_json::DecodeResult<{name}>{{
+                        rustc_json::decode(&response)
                         }}
-                    "#));
+                        "#,name=name));
                 }
                 JsonValue::Array(array) => {
                     let name = array.clone().pop();
                     match name {
                         Some(n) => {
                             returns.push_str(&format!(r#"
-                                fn parse_qemu_response(&self, response: &String) ->
-                                    rustc_json::DecodeResult<T>
-                                    where T: rustc_decodable{{
-                                    rustc_json::decode(&response)
-                                }}
-                            "#));
+                            fn parse_qemu_response(&self, response: &String) ->
+                            rustc_json::DecodeResult<{name}>{{
+                            rustc_json::decode(&response)
+                            }}
+                            "#, name=n));
                         }
                         None => {
                             // TODO: What should we do here if the array doesn't have a value?
@@ -324,13 +321,14 @@ impl Command {
 
         } else {
             let name = sanitize_name(&self.name);
-            returns.push_str(r#"
+            returns.push_str(&format!(r#"
                 fn parse_qemu_response(&self, response: &String) ->
-                    rustc_json::DecodeResult<T> where T: rustc_decodable{
-                    rustc_json::decode(&response)
-                }
-            "#);
+                rustc_json::DecodeResult<{name}>{{
+                rustc_json::decode(&response)
+                }}
+                "#, name=name));
         }
+
 
         format!(r#"
         #[derive(Debug)]
@@ -344,15 +342,13 @@ impl Command {
                 }}
             }}
         }}
-        impl<T> QemuCmd<T> for {name} {{
+        impl QemuCmd for {name} {{
             fn to_json(&self)->String{{
                 let mut to_json = json::JsonValue::new_object();
                 to_json["execute"] = "{execute_name}".into();
-                to_json["arguments"] = json::JsonValue::new_object();
                 {to_json_fields}
                 to_json.dump()
             }}
-            {parse_response}
         }}
         "#,
         name=sanitize_name(&self.name),
@@ -360,8 +356,8 @@ impl Command {
         fields=struct_fields.join(","),
         impl_fields=impl_fields.join(","),
         impl_input=impl_input.join(","),
-        to_json_fields=to_json.join("\n"),
-        parse_response=returns
+        to_json_fields=to_json.join("\n")//,
+        //parse_response=returns
     )
     }
 }
