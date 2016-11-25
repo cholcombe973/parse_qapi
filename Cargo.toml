@@ -9,4 +9,4 @@ repository = "https://github.com/cholcombe973/parse_qapi"
 [dependencies]
 json = "~0.8"
 lazy_static = "~0.2"
-nom = "~1.2"
+nom = "^2.0"
