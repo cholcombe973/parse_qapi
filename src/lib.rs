@@ -4,8 +4,12 @@ extern crate json;
 extern crate lazy_static;
 #[macro_use]
 extern crate nom;
+#[macro_use]
+extern crate serde_derive;
 
 use std::str::from_utf8;
+
+mod serde_parser;
 
 use json::JsonValue;
 use nom::multispace;
@@ -38,9 +42,7 @@ lazy_static! {
 
 fn sanitize_name(name: &String) -> String {
     println!("sanitize_name: {}", name);
-    let safe_name = name.replace("-", "_")
-        .replace("*", "")
-        .replace(".", "_");
+    let safe_name = name.replace("-", "_").replace("*", "").replace(".", "_");
 
     if REPLACEMAP.contains_key(&safe_name) {
         REPLACEMAP.get(&safe_name).unwrap().clone()
@@ -75,10 +77,13 @@ named!(comment_line<&[u8], String>,
 );
 
 // Count {}'s and return a section
-fn find_element(input: &[u8]) -> nom::IResult<&[u8], String> {
+pub fn find_element(input: &[u8]) -> nom::IResult<&[u8], String> {
     let mut brace_count = 0;
     let mut count = 0;
     loop {
+        if input.len() == 0{
+            break;
+        }
         if input[count] as char == '{' {
             brace_count += 1;
             count += 1;
@@ -93,8 +98,10 @@ fn find_element(input: &[u8]) -> nom::IResult<&[u8], String> {
         }
         count += 1;
     }
-    nom::IResult::Done(&input[count..],
-                       String::from_utf8_lossy(&input[0..count]).into_owned())
+    nom::IResult::Done(
+        &input[count..],
+        String::from_utf8_lossy(&input[0..count]).into_owned(),
+    )
 }
 
 fn remove_comments(input: String) -> String {
@@ -189,21 +196,20 @@ pub struct Struct {
 
 fn json_val_to_rust(input: &JsonValue) -> String {
     match input {
-        &JsonValue::String(ref s) => {
-            match s.as_ref() {
-                "uint64" => "u64".to_string(),
-                "uint32" => "u32".to_string(),
-                "bool" => "bool".to_string(),
-                "int" => "f64".to_string(),
-                "str" => "String".to_string(),
-                _ => "String".to_string(),
-            }
-        }
+        &JsonValue::String(ref s) => match s.as_ref() {
+            "uint64" => "u64".to_string(),
+            "uint32" => "u32".to_string(),
+            "bool" => "bool".to_string(),
+            "int" => "f64".to_string(),
+            "str" => "String".to_string(),
+            _ => "String".to_string(),
+        },
         &JsonValue::Number(num) => "f64".to_string(),
         &JsonValue::Boolean(b) => "bool".to_string(),
         &JsonValue::Null => "None".to_string(),
         &JsonValue::Object(ref map) => "struct".to_string(),
         &JsonValue::Array(ref values) => "Vec<String>".to_string(),
+        &JsonValue::Short(s) => "".to_string(),
     }
 }
 
@@ -225,19 +231,23 @@ impl Struct {
 
         if self.fields.is_object() {
             for f in self.fields.entries() {
-                let name = sanitize_name(f.0);
+                let name = sanitize_name(&f.0.to_string());
                 struct_fields.push(format!("pub {name}:{type}",name=name,
                     type=json_val_to_rust(f.1)
                 ));
             }
         }
 
-        format!(r#"
+        format!(
+            r#"
             #[derive(Debug, RustcDecodable)]
             pub struct {name}{{
                 {fields}
             }}
-            "#, name=sanitize_name(&self.name), fields=struct_fields.join(","))
+            "#,
+            name = sanitize_name(&self.name),
+            fields = struct_fields.join(",")
+        )
     }
 }
 
@@ -266,18 +276,18 @@ impl Command {
         let mut returns = String::new();
         let mut to_json: Vec<String> = Vec::new();
 
-
-
         if self.fields.is_object() {
             for f in self.fields.entries() {
-                let name = sanitize_name(f.0);
+                let name = sanitize_name(&f.0.to_string());
                 let field_type = json_val_to_rust(f.1);
 
                 to_json.push(format!(
-                        "to_json[\"arguments\"][\"{qemu_name}\"] = self.{name}.clone().into();",
-                    qemu_name=f.0.replace("*",""),name=name));
+                    "to_json[\"arguments\"][\"{qemu_name}\"] = self.{name}.clone().into();",
+                    qemu_name = f.0.replace("*", ""),
+                    name = name
+                ));
                 struct_fields.push(format!("pub {name}:{type}", name=name, type=field_type));
-                impl_fields.push(format!("{name}:{name}", name=name));
+                impl_fields.push(format!("{name}:{name}", name = name));
                 impl_input.push(format!("{name}:{type}",name=name, type=field_type));
             }
         }
@@ -293,23 +303,29 @@ impl Command {
             match self.returns {
                 JsonValue::String(s) => {
                     let name = sanitize_name(&s);
-                    returns.push_str(&format!(r#"
+                    returns.push_str(&format!(
+                        r#"
                         fn parse_qemu_response(&self, response: &String) ->
                         rustc_json::DecodeResult<{name}>{{
                         rustc_json::decode(&response)
                         }}
-                        "#,name=name));
+                        "#,
+                        name = name
+                    ));
                 }
                 JsonValue::Array(array) => {
                     let name = array.clone().pop();
                     match name {
                         Some(n) => {
-                            returns.push_str(&format!(r#"
+                            returns.push_str(&format!(
+                                r#"
                             fn parse_qemu_response(&self, response: &String) ->
                             rustc_json::DecodeResult<{name}>{{
                             rustc_json::decode(&response)
                             }}
-                            "#, name=n));
+                            "#,
+                                name = n
+                            ));
                         }
                         None => {
                             // TODO: What should we do here if the array doesn't have a value?
@@ -318,19 +334,21 @@ impl Command {
                 }
                 _ => {}
             };
-
         } else {
             let name = sanitize_name(&self.name);
-            returns.push_str(&format!(r#"
+            returns.push_str(&format!(
+                r#"
                 fn parse_qemu_response(&self, response: &String) ->
                 rustc_json::DecodeResult<{name}>{{
                 rustc_json::decode(&response)
                 }}
-                "#, name=name));
+                "#,
+                name = name
+            ));
         }
 
-
-        format!(r#"
+        format!(
+            r#"
         #[derive(Debug)]
         pub struct {name} {{
             {fields}
@@ -351,14 +369,14 @@ impl Command {
             }}
         }}
         "#,
-        name=sanitize_name(&self.name),
-        execute_name=&self.name,
-        fields=struct_fields.join(","),
-        impl_fields=impl_fields.join(","),
-        impl_input=impl_input.join(","),
-        to_json_fields=to_json.join("\n")//,
-        //parse_response=returns
-    )
+            name = sanitize_name(&self.name),
+            execute_name = &self.name,
+            fields = struct_fields.join(","),
+            impl_fields = impl_fields.join(","),
+            impl_input = impl_input.join(","),
+            to_json_fields = to_json.join("\n") //,
+                                                //parse_response=returns
+        )
     }
 }
 
@@ -388,19 +406,23 @@ impl Union {
                     ));
                 } else {
                     struct_fields.push(format!("pub {name}:{type}",
-                        name=sanitize_name(f.0),
+                        name=sanitize_name(&f.0.to_string()),
                         type=json_val_to_rust(f.1)
                     ));
                 }
             }
         }
 
-        format!(r#"
+        format!(
+            r#"
             #[derive(Debug,RustcDecodable)]
             pub struct {name}{{
                 {fields}
             }}
-            "#, name=self.name, fields=struct_fields.join(","))
+            "#,
+            name = self.name,
+            fields = struct_fields.join(",")
+        )
     }
 }
 
@@ -422,21 +444,22 @@ impl Event {
 
         if self.data.is_object() {
             for f in self.data.entries() {
-                let name = sanitize_name(f.0);
+                let name = sanitize_name(&f.0.to_string());
                 let field_type = json_val_to_rust(f.1);
 
                 struct_fields.push(format!("pub {name}:{type}", name=name, type=field_type));
             }
         }
 
-        format!(r#"
+        format!(
+            r#"
             #[derive(Debug)]
             pub struct {name} {{
                 {fields}
             }}
             "#,
-            name=sanitize_name(&self.name),
-            fields=struct_fields.join(","),
+            name = sanitize_name(&self.name),
+            fields = struct_fields.join(","),
         )
     }
 }
@@ -462,21 +485,22 @@ impl Enum {
                 match f {
                     &JsonValue::String(ref s) => {
                         let name = sanitize_name(s);
-                        struct_fields.push(format!("{name}", name=name));
+                        struct_fields.push(format!("{name}", name = name));
                     }
                     _ => {}
                 }
             }
         }
 
-        format!(r#"
+        format!(
+            r#"
             #[derive(Debug,RustcDecodable)]
             pub enum {name} {{
                 {fields}
             }}
             "#,
-            name=sanitize_name(&self.name),
-            fields=struct_fields.join(","),
+            name = sanitize_name(&self.name),
+            fields = struct_fields.join(","),
         )
     }
 }
@@ -495,7 +519,9 @@ pub enum QemuType {
 impl QemuType {
     fn parse(input: json::JsonValue) -> Self {
         if !input["include"].is_null() {
-            QemuType::Include { name: input["input"].as_str().unwrap_or("").to_string() }
+            QemuType::Include {
+                name: input["input"].as_str().unwrap_or("").to_string(),
+            }
         } else if !input["enum"].is_null() {
             QemuType::Enum(Enum::parse(&input))
         } else if !input["command"].is_null() {
