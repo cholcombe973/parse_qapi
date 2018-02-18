@@ -19,7 +19,7 @@ fn json_val_to_rust(input: &Value) -> String {
             "uint64" => "u64".to_string(),
             "uint32" => "u32".to_string(),
             "bool" => "bool".to_string(),
-            "int" => "f64".to_string(),
+            "int" => "i64".to_string(),
             "str" => "String".to_string(),
             _ => "String".to_string(),
         },
@@ -31,21 +31,29 @@ fn json_val_to_rust(input: &Value) -> String {
     }
 }
 
-fn print_struct(v: serde_json::Map<String, Value>) -> Result<(), String> {
-    let name = v.get("struct")
-        .unwrap()
-        .as_str()
-        .unwrap();
-    println!("#[derive(Debug)");
-    println!("pub struct {} {{", name);
-    for (field_name, field_type) in v.get("data")
-        .unwrap()
-        .as_object()
-        .unwrap()
+// Prefix reserved words with qemu__
+// TODO: Need to indicate we changed something so a serde field
+// attribute can be added
+fn reserved_words(input: String) -> String {
+    if input.starts_with("type") || input.starts_with("in") || input.starts_with("static")
+        || input.starts_with("abstract")
     {
+        return format!("qemu_{}", input);
+    }
+
+    input
+}
+
+fn print_struct(v: serde_json::Map<String, Value>) -> Result<(), String> {
+    let name = v.get("struct").unwrap().as_str().unwrap();
+    println!("#[derive(Debug, Deserialize, Serialize)]");
+    println!("#[serde(rename_all = \"kebab-case\")]");
+    println!("pub struct {} {{", name);
+    for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
+        // TODO: If field_name == "type" change it and add a serde parsing note to it
         println!(
             "\tpub {}: {},",
-            field_name.replace("*", "").replace("-", "_"),
+            reserved_words(field_name.replace("*", "").replace("-", "_")),
             json_val_to_rust(field_type)
         );
     }
@@ -53,29 +61,85 @@ fn print_struct(v: serde_json::Map<String, Value>) -> Result<(), String> {
     Ok(())
 }
 
-fn print_command(v: HashMap<String, Value>) -> Result<(), String> {
-    //
+// TODO: For commands these need to create a fn that takes possible
+// arguments and sets a return type from the parsed json.
+fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
+    // { 'command': 'add_client',
+    // 'data': { 'protocol': 'str', 'fdname': 'str', '*skipauth': 'bool',
+    //            '*tls': 'bool' } }
+    let name = v.get("command").unwrap().as_str().unwrap();
+    // args are optional
+    let data = v.get("data");
+    // return type is optional, can be an array or just a plain type
+    let return_type = v.get("returns");
+    let mut fn_args: Vec<String> = Vec::new();
+
+    let mut fn_definition = format!("pub fn {}_cmd(", name.replace("-", "_"));
+    match data {
+        Some(v) => match v {
+            &Value::Object(ref o) => {
+                let args: Vec<String> = o.iter()
+                    .map(|(name, val)| {
+                        format!(
+                            "{}: {}",
+                            reserved_words(name.replace("*", "").replace("-", "_")),
+                            json_val_to_rust(val)
+                        )
+                    })
+                    .collect();
+                fn_definition.push_str(&args.join(","));
+                fn_args = o.keys()
+                    .map(|s| reserved_words(s.replace("*", "").replace("-", "_")))
+                    .collect();
+            }
+            _ => {
+                return Err(format!("Unknown data field type: {:?}", data));
+            }
+        },
+        None => {}
+    };
+    fn_definition.push_str(")");
+
+    match return_type {
+        Some(r) => match r {
+            &Value::Array(ref a) => {
+                fn_definition.push_str(&format!(
+                    "->Result<Vec<{}>, String>",
+                    a[0].as_str().unwrap()
+                ));
+            }
+            &Value::String(ref s) => {
+                fn_definition.push_str(&format!("->Result<{}, String>", s));
+            }
+            _ => {
+                return Err(format!("Unknown return field type: {:?}", return_type));
+            }
+        },
+        None => {}
+    };
+    fn_definition.push_str("{");
+
+    println!("{}", fn_definition);
+    println!("let ret = call_qemu({})?;", fn_args.join(","));
+    println!("Ok(ret)");
+    println!("}}");
     Ok(())
 }
 
 fn print_enum(v: serde_json::Map<String, Value>) -> Result<(), String> {
     //enum: {"data": Array([String("read"), String("write")]), "enum": String("IoOperationType")}
-    let name = v.get("enum")
-        .unwrap()
-        .as_str()
-        .unwrap();
-    println!("#[derive(Debug)]");
+    let name = v.get("enum").unwrap().as_str().unwrap();
+    println!("#[derive(Debug, Deserialize, Serialize)]");
+    println!("#[serde(rename_all = \"kebab-case\")]");
     println!("pub enum {} {{", name);
     // Enum can either contain an array of values or just a single value
-    match v.get("data").unwrap(){
-        &Value::Array(ref a) => {
-            for field in a{
-                println!("\t{},", field.as_str().unwrap().to_camel_case());
-            }
+    match v.get("data").unwrap() {
+        &Value::Array(ref a) => for field in a {
+            println!("\t{},", field.as_str().unwrap().to_camel_case());
         },
         _ => {
             return Err(format!("Unknown enum field: {:?}", v.get("data")));
-        },
+        }
     };
     println!("}}");
 
@@ -92,13 +156,11 @@ fn test_get_definitions() {
             Value::Object(map) => {
                 // Most things should be objects
                 if map.contains_key("struct") {
-                    //println!("Struct: {:?}", map);
-                    //print_struct(map);
+                    print_struct(map);
                 } else if map.contains_key("command") {
-                    //println!("command: {:?}", map);
+                    print_command(map);
                 } else if map.contains_key("enum") {
-                    //println!("enum: {:?}", map);
-                    print_enum(map);
+                    //print_enum(map);
                 }
             }
             _ => {
