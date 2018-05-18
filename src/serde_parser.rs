@@ -6,10 +6,10 @@ extern crate serde_json;
 
 use std::collections::HashMap;
 
-use nom::IResult;
 use self::heck::CamelCase;
-use self::serde_json::Value;
 use self::serde_json::Result as SerdeResult;
+use self::serde_json::Value;
+use nom::IResult;
 
 use {find_element, QemuType};
 
@@ -32,37 +32,46 @@ fn json_val_to_rust(input: &Value) -> String {
 }
 
 // Prefix reserved words with qemu__
-// TODO: Need to indicate we changed something so a serde field
-// attribute can be added
-fn reserved_words(input: String) -> String {
+// Returns Some(String) if it changed it, None otherwise
+fn reserved_words(input: &String) -> Option<String> {
     if input.starts_with("type") || input.starts_with("in") || input.starts_with("static")
         || input.starts_with("abstract")
     {
-        return format!("qemu_{}", input);
+        return Some(format!("qemu_{}", input));
     }
 
-    input
+    None
 }
 
 fn print_struct(v: serde_json::Map<String, Value>) -> Result<(), String> {
     let name = v.get("struct").unwrap().as_str().unwrap();
+    if name == "String" {
+        // Skip this weird wrapper thing
+        return Ok(());
+    }
     println!("#[derive(Debug, Deserialize, Serialize)]");
     println!("#[serde(rename_all = \"kebab-case\")]");
     println!("pub struct {} {{", name);
     for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
-        // TODO: If field_name == "type" change it and add a serde parsing note to it
-        println!(
-            "\tpub {}: {},",
-            reserved_words(field_name.replace("*", "").replace("-", "_")),
-            json_val_to_rust(field_type)
-        );
+        let n = field_name.replace("*", "").replace("-", "_");
+        match reserved_words(&n) {
+            Some(renamed) => {
+                println!(
+                    "#[serde(rename = \"{}\")]\n\tpub {}: {},",
+                    &n,
+                    renamed,
+                    json_val_to_rust(field_type)
+                );
+            }
+            None => {
+                println!("\tpub {}: {},", &n, json_val_to_rust(field_type));
+            }
+        }
     }
     println!("}}");
     Ok(())
 }
 
-// TODO: For commands these need to create a fn that takes possible
-// arguments and sets a return type from the parsed json.
 fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
     // { 'command': 'add_client',
     // 'data': { 'protocol': 'str', 'fdname': 'str', '*skipauth': 'bool',
@@ -80,16 +89,22 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
             &Value::Object(ref o) => {
                 let args: Vec<String> = o.iter()
                     .map(|(name, val)| {
-                        format!(
-                            "{}: {}",
-                            reserved_words(name.replace("*", "").replace("-", "_")),
-                            json_val_to_rust(val)
-                        )
+                        let n = name.replace("*", "").replace("-", "_");
+                        match reserved_words(&n) {
+                            Some(renamed) => format!("{}: {}", renamed, json_val_to_rust(val)),
+                            None => format!("{}: {}", &n, json_val_to_rust(val)),
+                        }
                     })
                     .collect();
                 fn_definition.push_str(&args.join(","));
                 fn_args = o.keys()
-                    .map(|s| reserved_words(s.replace("*", "").replace("-", "_")))
+                    .map(|s| {
+                        let n = s.replace("*", "").replace("-", "_");
+                        match reserved_words(&n) {
+                            Some(renamed) => renamed,
+                            None => n,
+                        }
+                    })
                     .collect();
             }
             _ => {
@@ -109,18 +124,40 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
                 ));
             }
             &Value::String(ref s) => {
+                let s = if s == "str" {
+                    "String"
+                } else if s == "int" {
+                    "i64"
+                } else {
+                    s
+                };
                 fn_definition.push_str(&format!("->Result<{}, String>", s));
             }
             _ => {
                 return Err(format!("Unknown return field type: {:?}", return_type));
             }
         },
-        None => {}
+        None => {
+            fn_definition.push_str("->Result<Foo, String>");
+        }
     };
     fn_definition.push_str("{");
 
     println!("{}", fn_definition);
-    println!("let ret = call_qemu({})?;", fn_args.join(","));
+    println!("let cmd = json!({{");
+    println!("\"execute\": \"{}\"", name);
+    let json_args: Vec<String> = fn_args
+        .iter()
+        .map(|arg| format!("\"{}\": {}", arg, arg))
+        .collect();
+    if !json_args.is_empty() {
+        println!(",");
+        println!("\"arguments\": {{");
+        println!("{}", json_args.join(","));
+        println!("}}");
+    }
+    println!("}});");
+    println!("let ret = call_qemu(cmd)?;");
     println!("Ok(ret)");
     println!("}}");
     Ok(())
@@ -151,6 +188,7 @@ fn test_get_definitions() {
     let definitions = get_definitions(
         "https://raw.githubusercontent.com/elmarco/qemu/qapi/qapi-schema.json",
     ).unwrap();
+    println!("use call_qemu;");
     for d in definitions {
         match d {
             Value::Object(map) => {
@@ -169,7 +207,6 @@ fn test_get_definitions() {
             }
         }
     }
-    //println!("definitions: {:#?}", definitions);
 }
 
 fn get_definitions(url: &str) -> Result<Vec<Value>, String> {

@@ -6,13 +6,18 @@ extern crate lazy_static;
 extern crate nom;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde;
+#[macro_use]
+extern crate serde_json;
 
 use std::str::from_utf8;
 
 mod serde_parser;
+mod test;
 
 use json::JsonValue;
 use nom::multispace;
+use serde::de::DeserializeOwned;
 
 use std::collections::HashMap;
 
@@ -38,6 +43,13 @@ lazy_static! {
         m.insert("9".to_string(), "qemu_9".to_string());
         m
     };
+}
+
+fn call_qemu<T: DeserializeOwned>(v: serde_json::Value) -> Result<T, String> {
+    let s = "";
+    let result = serde_json::from_str::<T>(s).map_err(|e| e.to_string())?;
+
+    Ok(result)
 }
 
 fn sanitize_name(name: &String) -> String {
@@ -81,7 +93,7 @@ pub fn find_element(input: &[u8]) -> nom::IResult<&[u8], String> {
     let mut brace_count = 0;
     let mut count = 0;
     loop {
-        if input.len() == 0{
+        if input.len() == 0 {
             break;
         }
         if input[count] as char == '{' {
