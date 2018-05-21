@@ -2,16 +2,13 @@
 extern crate lazy_static;
 #[macro_use]
 extern crate nom;
-#[macro_use]
-extern crate serde_derive;
 extern crate serde;
-#[macro_use]
 extern crate serde_json;
 
 use std::str::from_utf8;
 
 mod serde_parser;
-//mod test;
+pub use serde_parser::generate_rust_definitions;
 
 use nom::multispace;
 use serde::de::DeserializeOwned;

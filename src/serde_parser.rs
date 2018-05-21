@@ -4,14 +4,11 @@ extern crate reqwest;
 extern crate serde;
 extern crate serde_json;
 
-use std::collections::HashMap;
-
 use self::heck::CamelCase;
-use self::serde_json::Result as SerdeResult;
 use self::serde_json::Value;
 use nom::IResult;
 
-use {find_element, QemuType};
+use find_element;
 
 fn json_val_to_rust(input: &Value) -> String {
     match input {
@@ -23,11 +20,11 @@ fn json_val_to_rust(input: &Value) -> String {
             "str" => "String".to_string(),
             _ => "String".to_string(),
         },
-        &Value::Number(ref num) => "f64".to_string(),
-        &Value::Bool(b) => "bool".to_string(),
+        &Value::Number(_) => "f64".to_string(),
+        &Value::Bool(_) => "bool".to_string(),
         &Value::Null => "None".to_string(),
-        &Value::Object(ref map) => "struct".to_string(),
-        &Value::Array(ref values) => "Vec<String>".to_string(),
+        &Value::Object(_) => "struct".to_string(),
+        &Value::Array(_) => "Vec<String>".to_string(),
     }
 }
 
@@ -43,62 +40,64 @@ fn reserved_words(input: &String) -> Option<String> {
     None
 }
 
-fn print_struct(v: serde_json::Map<String, Value>) -> Result<(), String> {
+fn print_struct(v: serde_json::Map<String, Value>) -> Result<String, String> {
+    let mut output = String::new();
     let name = v.get("struct").unwrap().as_str().unwrap();
     if name == "String" {
         // Skip this weird wrapper thing
-        return Ok(());
+        return Ok("".into());
     }
-    println!("#[derive(Debug, Deserialize, Serialize)]");
-    println!("#[serde(rename_all = \"kebab-case\")]");
-    println!("pub struct {} {{", name);
+    output.push_str("#[derive(Debug, Deserialize, Serialize)]");
+    output.push_str("#[serde(rename_all = \"kebab-case\")]");
+    output.push_str(&format!("pub struct {} {{", name));
     for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
         let n = field_name.replace("*", "").replace("-", "_");
         match reserved_words(&n) {
             Some(renamed) => {
-                println!(
+                output.push_str(&format!(
                     "#[serde(rename = \"{}\")]\n\tpub {}: {},",
                     &n,
                     renamed,
                     json_val_to_rust(field_type)
-                );
+                ));
             }
             None => {
-                println!("\tpub {}: {},", &n, json_val_to_rust(field_type));
+                output.push_str(&format!("\tpub {}: {},", &n, json_val_to_rust(field_type)));
             }
         }
     }
-    println!("}}");
-    Ok(())
+    output.push_str("}}");
+    Ok(output)
 }
 
-fn print_union(v: serde_json::Map<String, Value>) -> Result<(), String> {
-    //println!("v: {:?}", v);
+fn print_union(v: serde_json::Map<String, Value>) -> Result<String, String> {
+    let mut output = String::new();
     let name = v.get("union").unwrap().as_str().unwrap();
-    println!("#[derive(Debug, Deserialize, Serialize)]");
-    println!("pub enum {} {{", name);
+    output.push_str("#[derive(Debug, Deserialize, Serialize)]");
+    output.push_str(&format!("pub enum {} {{", name));
     for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
         let n = field_name.replace("*", "").replace("-", "_");
         match reserved_words(&n) {
             Some(renamed) => {
-                println!(
+                output.push_str(&format!(
                     "#[serde(rename = \"{}\")]\n\t{}({}),",
                     &n,
                     renamed,
                     json_val_to_rust(field_type)
-                );
+                ));
             }
             None => {
-                println!("\t{}({}),", &n, json_val_to_rust(field_type));
+                output.push_str(&format!("\t{}({}),", &n, json_val_to_rust(field_type)));
             }
         }
     }
-    println!("}}");
+    output.push_str("}}");
 
-    Ok(())
+    Ok(output)
 }
 
-fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
+fn print_command(v: serde_json::Map<String, Value>) -> Result<String, String> {
+    let mut output = String::new();
     // { 'command': 'add_client',
     // 'data': { 'protocol': 'str', 'fdname': 'str', '*skipauth': 'bool',
     //            '*tls': 'bool' } }
@@ -169,36 +168,38 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
     };
     fn_definition.push_str("{");
 
-    println!("{}", fn_definition);
-    println!("let cmd = json!({{");
-    println!("\"execute\": \"{}\"", name);
+    output.push_str(&format!("{}", fn_definition));
+    output.push_str("let cmd = json!({{");
+    output.push_str(&format!("\"execute\": \"{}\"", name));
     let json_args: Vec<String> = fn_args
         .iter()
         .map(|arg| format!("\"{}\": {}", arg, arg))
         .collect();
     if !json_args.is_empty() {
-        println!(",");
-        println!("\"arguments\": {{");
-        println!("{}", json_args.join(","));
-        println!("}}");
+        output.push_str(",");
+        output.push_str("\"arguments\": {{");
+        output.push_str(&format!("{}", json_args.join(",")));
+        output.push_str("}}");
     }
-    println!("}});");
-    println!("let ret = call_qemu(cmd)?;");
+    output.push_str("}});");
+    output.push_str("let ret = call_qemu(cmd)?;");
     if return_type.is_none() {
-        println!("Ok(())");
+        output.push_str("Ok(())");
     } else {
-        println!("Ok(ret)");
+        output.push_str("Ok(ret)");
     }
-    println!("}}");
-    Ok(())
+    output.push_str("}}");
+
+    Ok(output)
 }
 
-fn print_enum(v: serde_json::Map<String, Value>) -> Result<(), String> {
+fn print_enum(v: serde_json::Map<String, Value>) -> Result<String, String> {
+    let mut output = String::new();
     //enum: {"data": Array([String("read"), String("write")]), "enum": String("IoOperationType")}
     let name = v.get("enum").unwrap().as_str().unwrap();
-    println!("#[derive(Debug, Deserialize, Serialize)]");
-    println!("#[serde(rename_all = \"kebab-case\")]");
-    println!("pub enum {} {{", name);
+    output.push_str("#[derive(Debug, Deserialize, Serialize)]");
+    output.push_str("#[serde(rename_all = \"kebab-case\")]");
+    output.push_str(&format!("pub enum {} {{", name));
     // Enum can either contain an array of values or just a single value
     match v.get("data").unwrap() {
         &Value::Array(ref a) => for field in a {
@@ -207,50 +208,55 @@ fn print_enum(v: serde_json::Map<String, Value>) -> Result<(), String> {
             if super::REPLACEMAP.contains_key(f) {
                 //change to One, Two, Etc
                 let replaced = super::REPLACEMAP.get(f).unwrap().clone();
-                println!(
+                output.push_str(&format!(
                     "\t#[serde(rename = \"{}\")]\n\t{},",
                     f,
                     replaced.to_camel_case()
-                );
+                ));
             } else {
-                println!("\t{},", f.to_camel_case());
+                output.push_str(&format!("\t{},", f.to_camel_case()));
             }
         },
         _ => {
             return Err(format!("Unknown enum field: {:?}", v.get("data")));
         }
     };
-    println!("}}");
+    output.push_str("}}");
 
-    Ok(())
+    Ok(output)
 }
 
 #[test]
-fn test_get_definitions() {
-    let definitions = get_definitions(
-        "https://raw.githubusercontent.com/elmarco/qemu/qapi/qapi-schema.json",
-    ).unwrap();
-    println!("use call_qemu;");
+fn test_generate_definitions() {
+    let url = "https://raw.githubusercontent.com/elmarco/qemu/qapi/qapi-schema.json";
+    generate_rust_definitions(&url);
+}
+
+pub fn generate_rust_definitions(url: &str) -> Result<String, String> {
+    let definitions = get_definitions(url)?;
+    let mut output = String::new();
+    output.push_str("use call_qemu;");
     for d in definitions {
         match d {
             Value::Object(map) => {
                 // Most things should be objects
                 if map.contains_key("struct") {
-                    //print_struct(map);
+                    print_struct(map)?;
                 } else if map.contains_key("command") {
-                    //print_command(map);
+                    print_command(map)?;
                 } else if map.contains_key("enum") {
-                    print_enum(map);
+                    print_enum(map)?;
                 } else if map.contains_key("union") {
-                    //print_union(map);
+                    print_union(map)?;
                 }
             }
             _ => {
                 // Other value detected
-                println!("Unknown value: {:?}", d);
+                return Err(format!("Unknown value: {:?}", d));
             }
         }
     }
+    Ok(output)
 }
 
 fn get_definitions(url: &str) -> Result<Vec<Value>, String> {
