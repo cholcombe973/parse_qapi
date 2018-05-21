@@ -72,6 +72,32 @@ fn print_struct(v: serde_json::Map<String, Value>) -> Result<(), String> {
     Ok(())
 }
 
+fn print_union(v: serde_json::Map<String, Value>) -> Result<(), String> {
+    //println!("v: {:?}", v);
+    let name = v.get("union").unwrap().as_str().unwrap();
+    println!("#[derive(Debug, Deserialize, Serialize)]");
+    println!("pub enum {} {{", name);
+    for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
+        let n = field_name.replace("*", "").replace("-", "_");
+        match reserved_words(&n) {
+            Some(renamed) => {
+                println!(
+                    "#[serde(rename = \"{}\")]\n\t{}({}),",
+                    &n,
+                    renamed,
+                    json_val_to_rust(field_type)
+                );
+            }
+            None => {
+                println!("\t{}({}),", &n, json_val_to_rust(field_type));
+            }
+        }
+    }
+    println!("}}");
+
+    Ok(())
+}
+
 fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
     // { 'command': 'add_client',
     // 'data': { 'protocol': 'str', 'fdname': 'str', '*skipauth': 'bool',
@@ -138,7 +164,7 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
             }
         },
         None => {
-            fn_definition.push_str("->Result<Foo, String>");
+            fn_definition.push_str("->Result<(), String>");
         }
     };
     fn_definition.push_str("{");
@@ -158,7 +184,11 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<(), String> {
     }
     println!("}});");
     println!("let ret = call_qemu(cmd)?;");
-    println!("Ok(ret)");
+    if return_type.is_none() {
+        println!("Ok(())");
+    } else {
+        println!("Ok(ret)");
+    }
     println!("}}");
     Ok(())
 }
@@ -172,7 +202,19 @@ fn print_enum(v: serde_json::Map<String, Value>) -> Result<(), String> {
     // Enum can either contain an array of values or just a single value
     match v.get("data").unwrap() {
         &Value::Array(ref a) => for field in a {
-            println!("\t{},", field.as_str().unwrap().to_camel_case());
+            let f = field.as_str().unwrap();
+            //let numbers = vec!["1", "2", "3"];
+            if super::REPLACEMAP.contains_key(f) {
+                //change to One, Two, Etc
+                let replaced = super::REPLACEMAP.get(f).unwrap().clone();
+                println!(
+                    "\t#[serde(rename = \"{}\")]\n\t{},",
+                    f,
+                    replaced.to_camel_case()
+                );
+            } else {
+                println!("\t{},", f.to_camel_case());
+            }
         },
         _ => {
             return Err(format!("Unknown enum field: {:?}", v.get("data")));
@@ -194,11 +236,13 @@ fn test_get_definitions() {
             Value::Object(map) => {
                 // Most things should be objects
                 if map.contains_key("struct") {
-                    print_struct(map);
+                    //print_struct(map);
                 } else if map.contains_key("command") {
-                    print_command(map);
+                    //print_command(map);
                 } else if map.contains_key("enum") {
-                    //print_enum(map);
+                    print_enum(map);
+                } else if map.contains_key("union") {
+                    //print_union(map);
                 }
             }
             _ => {
