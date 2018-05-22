@@ -47,51 +47,55 @@ fn print_struct(v: serde_json::Map<String, Value>) -> Result<String, String> {
         // Skip this weird wrapper thing
         return Ok("".into());
     }
-    output.push_str("#[derive(Debug, Deserialize, Serialize)]");
-    output.push_str("#[serde(rename_all = \"kebab-case\")]");
-    output.push_str(&format!("pub struct {} {{", name));
+    output.push_str("\n#[derive(Debug, Deserialize, Serialize)]");
+    output.push_str("\n#[serde(rename_all = \"kebab-case\")]");
+    output.push_str(&format!("\npub struct {} {{", name));
     for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
         let n = field_name.replace("*", "").replace("-", "_");
         match reserved_words(&n) {
             Some(renamed) => {
                 output.push_str(&format!(
-                    "#[serde(rename = \"{}\")]\n\tpub {}: {},",
+                    "\n#[serde(rename = \"{}\")]\n\tpub {}: {},",
                     &n,
                     renamed,
                     json_val_to_rust(field_type)
                 ));
             }
             None => {
-                output.push_str(&format!("\tpub {}: {},", &n, json_val_to_rust(field_type)));
+                output.push_str(&format!(
+                    "\n\tpub {}: {},",
+                    &n,
+                    json_val_to_rust(field_type)
+                ));
             }
         }
     }
-    output.push_str("}}");
+    output.push_str("\n}");
     Ok(output)
 }
 
 fn print_union(v: serde_json::Map<String, Value>) -> Result<String, String> {
     let mut output = String::new();
     let name = v.get("union").unwrap().as_str().unwrap();
-    output.push_str("#[derive(Debug, Deserialize, Serialize)]");
-    output.push_str(&format!("pub enum {} {{", name));
+    output.push_str("\n#[derive(Debug, Deserialize, Serialize)]");
+    output.push_str(&format!("\npub enum {} {{", name));
     for (field_name, field_type) in v.get("data").unwrap().as_object().unwrap() {
         let n = field_name.replace("*", "").replace("-", "_");
         match reserved_words(&n) {
             Some(renamed) => {
                 output.push_str(&format!(
-                    "#[serde(rename = \"{}\")]\n\t{}({}),",
+                    "\n#[serde(rename = \"{}\")]\n\t{}({}),",
                     &n,
                     renamed,
                     json_val_to_rust(field_type)
                 ));
             }
             None => {
-                output.push_str(&format!("\t{}({}),", &n, json_val_to_rust(field_type)));
+                output.push_str(&format!("\n\t{}({}),", &n, json_val_to_rust(field_type)));
             }
         }
     }
-    output.push_str("}}");
+    output.push_str("\n}");
 
     Ok(output)
 }
@@ -153,6 +157,8 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<String, String> {
                     "String"
                 } else if s == "int" {
                     "i64"
+                } else if s == "**" {
+                    "String"
                 } else {
                     s
                 };
@@ -168,27 +174,27 @@ fn print_command(v: serde_json::Map<String, Value>) -> Result<String, String> {
     };
     fn_definition.push_str("{");
 
-    output.push_str(&format!("{}", fn_definition));
-    output.push_str("let cmd = json!({{");
-    output.push_str(&format!("\"execute\": \"{}\"", name));
+    output.push_str(&format!("\n{}", fn_definition));
+    output.push_str("\nlet cmd = json!({");
+    output.push_str(&format!("\n\"execute\": \"{}\"", name));
     let json_args: Vec<String> = fn_args
         .iter()
         .map(|arg| format!("\"{}\": {}", arg, arg))
         .collect();
     if !json_args.is_empty() {
         output.push_str(",");
-        output.push_str("\"arguments\": {{");
+        output.push_str("\"arguments\": {");
         output.push_str(&format!("{}", json_args.join(",")));
-        output.push_str("}}");
+        output.push_str("}");
     }
-    output.push_str("}});");
-    output.push_str("let ret = call_qemu(cmd)?;");
+    output.push_str("\n});");
+    output.push_str("\nlet ret = super::call_qemu(cmd)?;");
     if return_type.is_none() {
-        output.push_str("Ok(())");
+        output.push_str("\nOk(())");
     } else {
-        output.push_str("Ok(ret)");
+        output.push_str("\nOk(ret)");
     }
-    output.push_str("}}");
+    output.push_str("\n}");
 
     Ok(output)
 }
@@ -197,9 +203,9 @@ fn print_enum(v: serde_json::Map<String, Value>) -> Result<String, String> {
     let mut output = String::new();
     //enum: {"data": Array([String("read"), String("write")]), "enum": String("IoOperationType")}
     let name = v.get("enum").unwrap().as_str().unwrap();
-    output.push_str("#[derive(Debug, Deserialize, Serialize)]");
-    output.push_str("#[serde(rename_all = \"kebab-case\")]");
-    output.push_str(&format!("pub enum {} {{", name));
+    output.push_str("\n#[derive(Debug, Deserialize, Serialize)]");
+    output.push_str("\n#[serde(rename_all = \"kebab-case\")]");
+    output.push_str(&format!("\npub enum {} {{", name));
     // Enum can either contain an array of values or just a single value
     match v.get("data").unwrap() {
         &Value::Array(ref a) => for field in a {
@@ -209,19 +215,19 @@ fn print_enum(v: serde_json::Map<String, Value>) -> Result<String, String> {
                 //change to One, Two, Etc
                 let replaced = super::REPLACEMAP.get(f).unwrap().clone();
                 output.push_str(&format!(
-                    "\t#[serde(rename = \"{}\")]\n\t{},",
+                    "\n\t#[serde(rename = \"{}\")]\n\t{},",
                     f,
                     replaced.to_camel_case()
                 ));
             } else {
-                output.push_str(&format!("\t{},", f.to_camel_case()));
+                output.push_str(&format!("\n\t{},", f.to_camel_case()));
             }
         },
         _ => {
             return Err(format!("Unknown enum field: {:?}", v.get("data")));
         }
     };
-    output.push_str("}}");
+    output.push_str("\n}");
 
     Ok(output)
 }
@@ -235,19 +241,19 @@ fn test_generate_definitions() {
 pub fn generate_rust_definitions(url: &str) -> Result<String, String> {
     let definitions = get_definitions(url)?;
     let mut output = String::new();
-    output.push_str("use call_qemu;");
+    //output.push_str("use call_qemu;");
     for d in definitions {
         match d {
             Value::Object(map) => {
                 // Most things should be objects
                 if map.contains_key("struct") {
-                    print_struct(map)?;
+                    output.push_str(&print_struct(map)?);
                 } else if map.contains_key("command") {
-                    print_command(map)?;
+                    output.push_str(&print_command(map)?);
                 } else if map.contains_key("enum") {
-                    print_enum(map)?;
+                    output.push_str(&print_enum(map)?);
                 } else if map.contains_key("union") {
-                    print_union(map)?;
+                    output.push_str(&print_union(map)?);
                 }
             }
             _ => {
